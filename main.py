@@ -48,4 +48,3 @@ state = state.float()
 action = model(state)
 
 # Print the action
-print(action)
