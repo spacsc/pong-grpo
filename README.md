@@ -1,6 +1,6 @@
 ## TODO
-- [ ] model implementation
-- [ ] set up assault atari game
+- [x] model implementation
+- [x] set up assault atari game
 - [ ] implement GRPO
 - [ ] training loop
 
