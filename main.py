@@ -48,3 +48,6 @@ state = state.float()
 action = model(state)
 
 # Print the action
+print(action)
+
+def run_training_loop()
