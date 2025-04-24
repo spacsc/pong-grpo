@@ -9,13 +9,12 @@ import numpy as np
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class Model(nn.Module):
+class PolicyModel(nn.Module):
     def __init__(self, in_channels=4, action_space=4):
-        super(Model, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, 6, 5)   # expects in_channels=4
+        super(PolicyModel, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, 6, 5)
         self.pool  = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 16, 5)
-        self.pool  = nn.MaxPool2d(2, 2)
         self.fc1   = nn.Linear(16 * 18 * 18, 120)
         self.fc2   = nn.Linear(120, 84)
         self.fc3   = nn.Linear(84, action_space)
@@ -26,7 +25,7 @@ class Model(nn.Module):
         x = x.view(x.size(0), -1)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        return self.fc3(x)
+        return F.softmax(self.fc3(x), dim=1)
 
 def preprocess_frame(frame):
     transform = T.Compose([
@@ -39,72 +38,74 @@ def preprocess_frame(frame):
 
 gamma      = 0.99
 alpha      = 0.0001
-epsilon    = 0.1
 epochs     = 1000
 num_frames = 4
 
-def select_action(model, state, epsilon, action_space):
-    if random.random() < epsilon:
-        return random.randint(0, action_space - 1)
-    with torch.no_grad():
-        q_values = model(state)
-        return torch.argmax(q_values, dim=1).item()
-
-def runloop(env, model, optimizer, criterion, epochs, num_frames, gamma, epsilon):
+def runloop(env, model, optimizer, epochs, num_frames, gamma):
     frame_stack   = []
     total_rewards = []
 
     state, _ = env.reset()
     for epoch in range(epochs):
-        state_tensor = preprocess_frame(state).unsqueeze(0).to(device)
-        frame_stack.append(state_tensor)
-        if len(frame_stack) > num_frames:
-            frame_stack.pop(0)
+        log_probs = []
+        rewards   = []
+        done      = False
 
-        if len(frame_stack) == num_frames:
-            stacked_state = torch.cat(frame_stack, dim=1).to(device)
-            action = select_action(model, stacked_state, epsilon, env.action_space.n)
-
-            next_state, reward, terminated, truncated, _ = env.step(action)
-            next_state_tensor = preprocess_frame(next_state).unsqueeze(0).to(device)
-            frame_stack.append(next_state_tensor)
+        while not done:
+            state_tensor = preprocess_frame(state).unsqueeze(0).to(device)
+            frame_stack.append(state_tensor)
             if len(frame_stack) > num_frames:
                 frame_stack.pop(0)
 
-            next_stacked_state = torch.cat(frame_stack, dim=1).to(device)
+            if len(frame_stack) < num_frames:
+                action = env.action_space.sample()
+                state, _, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
+                continue
 
-            with torch.no_grad():
-                next_q_values     = model(next_stacked_state)
-                max_next_q_value = torch.max(next_q_values, dim=1)[0]
-            target = reward + gamma * max_next_q_value
+            stacked_state = torch.cat(frame_stack, dim=1).to(device)
+            probs = model(stacked_state)
+            m = torch.distributions.Categorical(probs)
+            action = m.sample()
+            log_probs.append(m.log_prob(action))
 
-            current_q_values = model(stacked_state)
-            current_q_value  = current_q_values[0, action]
-
-            loss = criterion(current_q_value, target)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            total_rewards.append(reward)
+            next_state, reward, terminated, truncated, _ = env.step(action.item())
+            rewards.append(reward)
 
             if terminated or truncated:
+                done = True
                 state, _ = env.reset()
                 frame_stack.clear()
             else:
                 state = next_state
 
-        if epoch % 100 == 0:
-            avg = np.mean(total_rewards[-100:]) if total_rewards else 0.0
-            print(f"Epoch {epoch}, Average Reward: {avg:.2f}")
+        # Compute discounted returns
+        R = 0
+        returns = []
+        for r in reversed(rewards):
+            R = r + gamma * R
+            returns.insert(0, R)
+        returns = torch.tensor(returns).to(device)
+        returns = (returns - returns.mean()) / (returns.std() + 1e-5)
+
+        log_probs = torch.stack(log_probs)
+        loss = -(log_probs * returns).sum()
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        total_rewards.append(sum(rewards))
+        if epoch % 10 == 0:
+            avg = np.mean(total_rewards[-10:])
+            print(f"Epoch {epoch}, Avg Reward (last 10): {avg:.2f}")
 
         env.render()
 
     env.close()
 
 env       = gym.make("ALE/Assault-v5", render_mode="human")
-model     = Model(in_channels=num_frames, action_space=env.action_space.n).to(device)
+model     = PolicyModel(in_channels=num_frames, action_space=env.action_space.n).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=alpha)
-criterion = nn.MSELoss()
 
-runloop(env, model, optimizer, criterion, epochs, num_frames, gamma, epsilon)
+runloop(env, model, optimizer, epochs, num_frames, gamma)
