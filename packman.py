@@ -31,9 +31,8 @@ class PolicyModel(nn.Module):
 def preprocess_frame(frame):
     transform = T.Compose([
         T.ToPILImage(),
-        T.Grayscale(),
-        T.Resize((84, 84)),
-        T.ToTensor()
+        T.Resize((84, 84)),  # Resize to 84x84
+        T.ToTensor()         # Convert to tensor (retains color channels)
     ])
     return transform(frame)
 
@@ -106,7 +105,7 @@ def runloop(env, model, optimizer, epochs, num_frames, gamma):
     env.close()
 
 env = gym.make("ALE/MsPacman-v5", render_mode="human")
-model = PolicyModel(in_channels=num_frames, action_space=env.action_space.n).to(device)
+model = PolicyModel(in_channels=num_frames * 3, action_space=env.action_space.n).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=alpha)
 
 runloop(env, model, optimizer, epochs, num_frames, gamma)
