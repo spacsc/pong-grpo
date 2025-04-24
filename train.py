@@ -12,20 +12,21 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class PolicyModel(nn.Module):
     def __init__(self, in_channels=4, action_space=4):
         super(PolicyModel, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, 6, 5)
-        self.pool  = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1   = nn.Linear(16 * 18 * 18, 120)
-        self.fc2   = nn.Linear(120, 84)
-        self.fc3   = nn.Linear(84, action_space)
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)  # Larger filter, stride for downsampling
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)          # More filters, smaller kernel
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)          # Additional convolutional layer
+        self.fc1   = nn.Linear(64 * 7 * 7, 512)                         # Adjusted for output size of conv layers
+        self.fc2   = nn.Linear(512, action_space)                       # Directly map to action space
+        self.dropout = nn.Dropout(0.5)                                  # Dropout for regularization
 
     def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(x.size(0), -1)
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = x.view(x.size(0), -1)  # Flatten
         x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return F.softmax(self.fc3(x), dim=1)
+        x = self.dropout(x)        # Apply dropout
+        return F.softmax(self.fc2(x), dim=1)
 
 def preprocess_frame(frame):
     transform = T.Compose([
